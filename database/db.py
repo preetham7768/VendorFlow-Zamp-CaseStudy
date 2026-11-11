@@ -277,6 +277,8 @@ def get_all_runs(
     db_path: Optional[Path] = None,
     status_filter: Optional[str] = None,
     search_query: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Retrieves runs from SQLite with optional filtering."""
     conn = get_connection(db_path)
@@ -293,6 +295,14 @@ def get_all_runs(
             query += " AND (vendor_name LIKE ? OR run_id LIKE ?)"
             like_val = f"%{search_query.strip()}%"
             params.extend([like_val, like_val])
+
+        if start_date:
+            query += " AND created_at >= ?"
+            params.append(start_date)
+
+        if end_date:
+            query += " AND created_at <= ?"
+            params.append(end_date)
 
         query += " ORDER BY created_at DESC"
         cursor.execute(query, params)

@@ -60,6 +60,19 @@ def execute_workflow(
     all_passed_checks: List[str] = []
     all_issues: List[ValidationIssue] = []
 
+    def notify_running(stage_num: int, name: str):
+        if progress_callback:
+            progress_callback(
+                StageResult(
+                    stage_number=stage_num,
+                    stage_name=name,
+                    status=StageStatus.RUNNING,
+                    summary="Executing stage rules...",
+                    details=[],
+                    duration_ms=0.0,
+                )
+            )
+
     def report_stage(
         stage_num: int,
         name: str,
@@ -85,6 +98,7 @@ def execute_workflow(
         # -------------------------------------------------------------
         # STAGE 1: Intake & Metadata Normalization
         # -------------------------------------------------------------
+        notify_running(1, "Receiving Vendor Submission")
         s1_start = time.perf_counter()
         submission.company_name = (submission.company_name or "").strip()
         submission.pan = (submission.pan or "").strip().upper()
@@ -113,6 +127,7 @@ def execute_workflow(
         # -------------------------------------------------------------
         # STAGE 2: Field Validation
         # -------------------------------------------------------------
+        notify_running(2, "Validating Company & Tax Details")
         s2_start = time.perf_counter()
         f_passed, f_issues = validate_fields(submission)
         all_passed_checks.extend(f_passed)
@@ -142,6 +157,7 @@ def execute_workflow(
         # -------------------------------------------------------------
         # STAGE 3: Document Completeness Check
         # -------------------------------------------------------------
+        notify_running(3, "Checking Uploaded Documents")
         s3_start = time.perf_counter()
         updated_docs, d_passed, d_issues = check_documents(submission.documents)
         submission.documents = updated_docs
@@ -172,6 +188,7 @@ def execute_workflow(
         # -------------------------------------------------------------
         # STAGE 4: Cross-Field Consistency Checks
         # -------------------------------------------------------------
+        notify_running(4, "Cross-Field Consistency Verification")
         s4_start = time.perf_counter()
         c_passed, c_issues = check_consistency(submission)
         all_passed_checks.extend(c_passed)
@@ -201,6 +218,7 @@ def execute_workflow(
         # -------------------------------------------------------------
         # STAGE 5: Duplicate Detection Check
         # -------------------------------------------------------------
+        notify_running(5, "Checking Duplicate Registrations")
         s5_start = time.perf_counter()
         dup_passed, dup_issues = check_duplicates(submission, db_path)
         all_passed_checks.extend(dup_passed)
@@ -230,6 +248,7 @@ def execute_workflow(
         # -------------------------------------------------------------
         # STAGE 6: Internal Restricted-Vendor Check
         # -------------------------------------------------------------
+        notify_running(6, "Checking Internal Restricted-Vendor Records")
         s6_start = time.perf_counter()
         restr_passed, restr_issues = check_restricted_registry(submission, db_path)
         all_passed_checks.extend(restr_passed)
@@ -259,6 +278,7 @@ def execute_workflow(
         # -------------------------------------------------------------
         # STAGE 7: Final Decision Engine
         # -------------------------------------------------------------
+        notify_running(7, "Generating Onboarding Decision")
         s7_start = time.perf_counter()
         decision: OnboardingDecision = make_decision(all_passed_checks, all_issues)
 
@@ -281,6 +301,7 @@ def execute_workflow(
         # -------------------------------------------------------------
         # STAGE 8: Communication & Audit Persistence
         # -------------------------------------------------------------
+        notify_running(8, "Preparing Communication & Saving Audit History")
         s8_start = time.perf_counter()
         communication_draft = generate_communication_draft(
             submission, decision, submission.run_id

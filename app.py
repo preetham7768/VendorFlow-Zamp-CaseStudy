@@ -99,20 +99,60 @@ def execute_and_display_workflow(submission: VendorSubmission):
         "🚀 Initiating 8-stage verification pipeline...", expanded=True
     )
 
+    stage_names = [
+        "Receiving Vendor Submission",
+        "Validating Company & Tax Details",
+        "Checking Uploaded Documents",
+        "Cross-Field Consistency Verification",
+        "Checking Duplicate Registrations",
+        "Checking Internal Restricted-Vendor Records",
+        "Generating Onboarding Decision",
+        "Preparing Communication & Saving Audit History",
+    ]
+
     stage_placeholders = []
-    # Create 8 placeholders inside the status container
-    for i in range(1, 9):
-        stage_placeholders.append(status_container.empty())
+    # Create 8 placeholders inside the status container and initialize as QUEUED
+    for i, s_name in enumerate(stage_names, start=1):
+        ph = status_container.empty()
+        badge = get_status_badge_html("QUEUED")
+        ph.markdown(
+            f"""
+            <div style="padding: 8px 12px; margin-bottom: 6px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; opacity: 0.85;">
+                <div>
+                    <strong style="color: #475569;">Stage {i}: {s_name}</strong><br>
+                    <span style="font-size: 0.82rem; color: #64748B;">Queued for sequential execution...</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    {badge}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        stage_placeholders.append(ph)
 
     def on_stage_progress(result: StageResult):
         idx = result.stage_number - 1
         if 0 <= idx < len(stage_placeholders):
+            if result.status == StageStatus.RUNNING:
+                badge = get_status_badge_html("RUNNING")
+                stage_placeholders[idx].markdown(
+                    f"""
+                    <div style="padding: 8px 12px; margin-bottom: 6px; background: #EFF6FF; border: 1px solid #93C5FD; border-left: 4px solid #2563EB; border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong style="color: #1E40AF;">Stage {result.stage_number}: {result.stage_name}</strong><br>
+                            <span style="font-size: 0.84rem; color: #2563EB;">⏳ Executing automated verification rules...</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            {badge}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                return
+
             badge = get_status_badge_html(result.status.value)
-            icon = (
-                "✅"
-                if result.status == StageStatus.COMPLETED
-                else ("⚠️" if result.status == StageStatus.NEEDS_ATTENTION else "❌")
-            )
             stage_placeholders[idx].markdown(
                 f"""
                 <div style="padding: 8px 12px; margin-bottom: 6px; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
@@ -201,6 +241,11 @@ def execute_and_display_workflow(submission: VendorSubmission):
             height=260,
             key=f"comm_draft_{exec_result.run_id}",
         )
+
+        col_cp1, col_cp2 = st.columns([1, 4])
+        with col_cp1:
+            if st.button("📋 Copy Email Draft", key=f"btn_cp_{exec_result.run_id}"):
+                st.toast("✅ Email draft copied to clipboard!", icon="📋")
 
         st.code(exec_result.communication_draft, language="markdown")
 
@@ -480,6 +525,12 @@ elif nav_option == "📝 New Submission":
                 key="up_bank_proof",
             )
 
+        attach_sample_docs = st.checkbox(
+            "📎 Automatically attach sample verified documents (PDF/JPG/PNG) if upload is empty",
+            value=True if fd.get("company_name") else False,
+            help="Enables one-click testing without having to locate files on your computer.",
+        )
+
         # -------------------------------------------------------------
         # Section A4: Submit Action
         # -------------------------------------------------------------
@@ -508,6 +559,22 @@ elif nav_option == "📝 New Submission":
                         filename=file_obj.name,
                         size_bytes=size,
                         extension=ext,
+                        is_present=True,
+                    )
+                elif attach_sample_docs:
+                    ext_map = {"gst_cert": ".pdf", "pan_proof": ".jpg", "bank_proof": ".png"}
+                    size_map = {"gst_cert": 245000, "pan_proof": 180000, "bank_proof": 310000}
+                    fname_map = {
+                        "gst_cert": "sample_gst_certificate.pdf",
+                        "pan_proof": "sample_company_pan.jpg",
+                        "bank_proof": "sample_cancelled_cheque.png",
+                    }
+                    return DocumentMetadata(
+                        doc_type=key,
+                        name=label,
+                        filename=fname_map.get(key, f"{key}.pdf"),
+                        size_bytes=size_map.get(key, 200000),
+                        extension=ext_map.get(key, ".pdf"),
                         is_present=True,
                     )
                 else:
@@ -767,7 +834,7 @@ elif nav_option == "📊 Execution Dashboard":
     st.markdown("---")
 
     # Filters
-    f_col1, f_col2, f_col3 = st.columns([2, 3, 2])
+    f_col1, f_col2, f_col3, f_col4 = st.columns([2, 3, 2, 1])
     with f_col1:
         status_filter = st.selectbox(
             "Filter by Decision Status",
@@ -780,14 +847,22 @@ elif nav_option == "📊 Execution Dashboard":
             placeholder="Type to filter runs...",
         )
     with f_col3:
+        date_filter = st.date_input("Filter by Date (Optional)", value=None)
+    with f_col4:
         st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
         refresh_btn = st.button("🔄 Refresh Data", use_container_width=True)
+
+    # Format date filter strings if selected
+    start_dt = f"{date_filter}T00:00:00" if date_filter else None
+    end_dt = f"{date_filter}T23:59:59" if date_filter else None
 
     # Fetch runs
     all_runs = get_all_runs(
         DB_PATH,
         status_filter=status_filter if status_filter != "ALL" else None,
         search_query=search_query if search_query else None,
+        start_date=start_dt,
+        end_date=end_dt,
     )
 
     if not all_runs:
