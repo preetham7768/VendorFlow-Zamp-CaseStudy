@@ -1,23 +1,36 @@
 """
 VendorFlow — Intelligent Vendor Onboarding & Verification System
-Main Streamlit Application.
+Phase 2: Document-Driven Vendor Verification & Cross-Document Intelligence.
 """
 
 import io
 from pathlib import Path
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
+from backend.document_extractor import (
+    extract_bank_document,
+    extract_gst_document,
+    extract_pan_document,
+)
 from backend.models import (
+    ConfidenceLevel,
     DecisionStatus,
     DocumentMetadata,
     DocumentStatus,
+    ExtractionStatus,
     StageResult,
     StageStatus,
     VendorSubmission,
     WorkflowExecutionResult,
+)
+from backend.synthetic_docs import (
+    generate_synthetic_bank_pdf,
+    generate_synthetic_gst_pdf,
+    generate_synthetic_pan_pdf,
+    generate_unreadable_pdf,
 )
 from backend.workflow import execute_workflow
 from database.db import (
@@ -36,7 +49,7 @@ from frontend.ui_helpers import (
 
 # Page configuration
 st.set_page_config(
-    page_title="VendorFlow — Intelligent Vendor Onboarding",
+    page_title="VendorFlow — Document-Driven Vendor Verification",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -49,11 +62,13 @@ init_db(DB_PATH)
 # Inject enterprise CSS
 inject_custom_css()
 
-# Session state initialization for form pre-filling & navigation
+# Session state initialization
 if "form_data" not in st.session_state:
     st.session_state.form_data = {}
 if "last_execution_result" not in st.session_state:
     st.session_state.last_execution_result = None
+if "extracted_review_data" not in st.session_state:
+    st.session_state.extracted_review_data = None
 
 
 def set_sample_data(scenario_type: str = "happy_path"):
@@ -71,10 +86,11 @@ def set_sample_data(scenario_type: str = "happy_path"):
             "bank_account_holder": "Aster Labs",
             "bank_account_number": "123456789012",
             "ifsc_code": "HDFC0001234",
-            "bank_name": "HDFC Bank",
+            "bank_name": "HDFC Bank Ltd",
         }
     elif scenario_type == "clear":
         st.session_state.form_data = {}
+        st.session_state.extracted_review_data = None
 
 
 def render_header():
@@ -83,7 +99,7 @@ def render_header():
         """
         <div class="vf-header">
             <h1>⚡ VendorFlow</h1>
-            <p>Intelligent Vendor Onboarding & Verification System • Automated Compliance & Risk Verification Engine</p>
+            <p>Phase 2: Document-Driven Intelligent Vendor Verification • PyMuPDF Extraction & Cross-Document Intelligence</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -91,27 +107,32 @@ def render_header():
 
 
 def execute_and_display_workflow(submission: VendorSubmission):
-    """Executes the verification pipeline and renders the live sequential stages and decision."""
-    st.subheader("⚡ Live Verification Pipeline Execution")
+    """Executes the 13-stage verification pipeline and renders the live sequential stages and decision."""
+    st.subheader("⚡ Live Document-Driven Verification Pipeline Execution")
 
     # Sequential execution container
     status_container = st.status(
-        "🚀 Initiating 8-stage verification pipeline...", expanded=True
+        "🚀 Initiating 13-stage document-driven verification pipeline...", expanded=True
     )
 
     stage_names = [
         "Receiving Vendor Submission",
-        "Validating Company & Tax Details",
         "Checking Uploaded Documents",
-        "Cross-Field Consistency Verification",
-        "Checking Duplicate Registrations",
-        "Checking Internal Restricted-Vendor Records",
-        "Generating Onboarding Decision",
-        "Preparing Communication & Saving Audit History",
+        "Extracting PDF Text",
+        "Identifying Vendor Information",
+        "Structuring Extracted Fields",
+        "Comparing PAN and GST Information",
+        "Comparing Company and Bank Information",
+        "Running Existing Field Validations",
+        "Running Duplicate Detection",
+        "Running Restricted-Vendor Checks",
+        "Generating Final Decision",
+        "Creating Communication Draft",
+        "Saving Execution History",
     ]
 
     stage_placeholders = []
-    # Create 8 placeholders inside the status container and initialize as QUEUED
+    # Create 13 placeholders inside the status container and initialize as QUEUED
     for i, s_name in enumerate(stage_names, start=1):
         ph = status_container.empty()
         badge = get_status_badge_html("QUEUED")
@@ -175,7 +196,7 @@ def execute_and_display_workflow(submission: VendorSubmission):
             submission, db_path=DB_PATH, progress_callback=on_stage_progress
         )
         status_container.update(
-            label=f"🏁 Verification Pipeline Completed — Decision: {exec_result.status.value} ({exec_result.total_duration_ms:.1f} ms)",
+            label=f"🏁 Verification Pipeline Completed — Decision: {exec_result.status.value} ({exec_result.total_duration_ms:.1f} ms across 13 stages)",
             state="complete",
             expanded=False,
         )
@@ -189,6 +210,33 @@ def execute_and_display_workflow(submission: VendorSubmission):
             run_id=exec_result.run_id,
         )
 
+        # -------------------------------------------------------------
+        # Phase 2 Document Extraction & Cross-Check Report Card
+        # -------------------------------------------------------------
+        st.markdown("### 📄 Phase 2 Document Extraction & Cross-Check Findings")
+        p2_c1, p2_c2, p2_c3 = st.columns(3)
+        with p2_c1:
+            render_metric_card("Documents Processed", exec_result.documents_processed_count, "Compliance uploads parsed")
+        with p2_c2:
+            render_metric_card("Discrepancies Found", exec_result.discrepancies_count, "Cross-source conflicts", "#D97706" if exec_result.discrepancies_count > 0 else "#16A34A")
+        with p2_c3:
+            render_metric_card("Human Confirmations", exec_result.manual_confirmations_count, "Unreadable / manual fields")
+
+        # Tabular Comparison of Document vs Manual Values
+        cross_checks = exec_result.cross_document_results.get("checks", [])
+        if cross_checks:
+            st.markdown("#### 🔍 Cross-Document Verification Matrix")
+            check_rows = []
+            for c in cross_checks:
+                check_rows.append(
+                    {
+                        "Verification Check": c.get("check_name"),
+                        "Status": c.get("status"),
+                        "Details & Outcome": c.get("message"),
+                    }
+                )
+            st.dataframe(pd.DataFrame(check_rows), use_container_width=True, hide_index=True)
+
         # Columns for Checks and Issues
         col1, col2 = st.columns(2)
 
@@ -201,7 +249,7 @@ def execute_and_display_workflow(submission: VendorSubmission):
                 st.info("No checks passed successfully.")
 
         with col2:
-            st.markdown("#### ⚠️ Items Requiring Attention / Issues")
+            st.markdown("#### ⚠️ Items Requiring Attention / Discrepancies")
             if exec_result.decision.issues:
                 for issue in exec_result.decision.issues:
                     badge_type = (
@@ -274,7 +322,7 @@ st.sidebar.markdown(
     <div style="text-align: center; padding: 12px 0 18px 0; border-bottom: 1px solid #E2E8F0; margin-bottom: 16px;">
         <span style="font-size: 2rem;">⚡</span>
         <h2 style="margin: 0; font-size: 1.3rem; font-weight: 700; color: #0F172A;">VendorFlow</h2>
-        <span style="font-size: 0.78rem; color: #64748B; font-weight: 500;">Intelligent Onboarding Engine</span>
+        <span style="font-size: 0.78rem; color: #64748B; font-weight: 500;">Phase 2: Document Intelligence</span>
     </div>
     """,
     unsafe_allow_html=True,
@@ -302,14 +350,15 @@ with col_s1:
     st.metric("Approved", metrics["approved"])
 with col_s2:
     st.metric("Approval Rate", f"{metrics['approval_rate']}%")
-    st.metric("Pending/Rej", f"{metrics['pending'] + metrics['rejected']}")
+    st.metric("Discrepancies", metrics.get("discrepancies_identified", 0))
 
 st.sidebar.markdown(
     """
     <div style="margin-top: 20px; font-size: 0.75rem; color: #94A3B8; line-height: 1.4;">
-        Supported Jurisdiction: <strong>India</strong><br>
+        Engine: <strong>Phase 2 (Document-Driven)</strong><br>
+        Extraction: <strong>PyMuPDF + Regex Parsing</strong><br>
         Database: <strong>SQLite (Local Persistent)</strong><br>
-        Version: <strong>1.0.0 (Case Study Build)</strong>
+        Version: <strong>2.0.0 (Document Intelligence)</strong>
     </div>
     """,
     unsafe_allow_html=True,
@@ -322,59 +371,66 @@ st.sidebar.markdown(
 if nav_option == "📌 Overview":
     render_header()
 
-    st.markdown("### 📊 Operational Overview")
-    m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
+    st.markdown("### 📊 Operational & Document Intelligence Overview")
+    m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
     with m_col1:
         render_metric_card("Total Submissions", metrics["total_submissions"], "All recorded runs")
     with m_col2:
-        render_metric_card("Approved", metrics["approved"], "Clean automated passes", "#16A34A")
+        render_metric_card("Approved", metrics["approved"], "Clean passes", "#16A34A")
     with m_col3:
-        render_metric_card("Pending Review", metrics["pending"], "Discrepancy / Document", "#D97706")
+        render_metric_card("Pending Review", metrics["pending"], "Discrepancy / Review", "#D97706")
     with m_col4:
         render_metric_card("Rejected", metrics["rejected"], "Policy hard-stop", "#DC2626")
     with m_col5:
-        render_metric_card("Approval Rate", f"{metrics['approval_rate']}%", "Automated throughput", "#2563EB")
+        render_metric_card("Approval Rate", f"{metrics['approval_rate']}%", "Automated rate", "#2563EB")
+    with m_col6:
+        render_metric_card("Docs Processed", metrics.get("documents_processed", 0), "Compliance PDFs", "#475569")
 
     st.markdown("---")
-    st.markdown("### 🔄 Automated Verification Workflow Pipeline")
+    st.markdown("### 🔄 13-Stage Document-Driven Verification Pipeline")
     st.markdown(
         """
-        VendorFlow converts slow, manual procurement onboarding reviews into a structured, deterministic, 
-        and fully auditable automated workflow.
+        In Phase 2, VendorFlow extracts information directly from uploaded PDF documents, compares extracted 
+        fields across documents and against manual entries, and integrates findings into the deterministic decision engine.
         """
     )
 
-    steps = [
-        ("1. Intake & Normalization", "Generates cryptographic Run ID, normalizes legal text, and masks sensitive tax/banking numbers for audit security."),
-        ("2. Field Validation", "Validates company identity, PAN structure (5-4-1), GSTIN format (15-char), and IFSC routing against jurisdictional standards."),
-        ("3. Document Completeness", "Verifies mandatory GST, PAN, and Bank proof uploads for presence, acceptable mime type (PDF/PNG/JPG), and size (<10MB)."),
-        ("4. Cross-Field Consistency", "Ensures embedded PAN within GSTIN matches submitted PAN, and normalizes legal suffixes to compare entity name with bank account holder."),
-        ("5. Duplicate Detection", "Queries SQLite approved vendors registry using SHA-256 hashes of tax identifiers to prevent duplicate registrations."),
-        ("6. Restricted Screening", "Screens tax ID hashes against a synthetic internal risk watchlist to enforce hard-stop compliance policies."),
-        ("7. Decision Engine", "Deterministic priority logic assigns final status (APPROVED, PENDING, REJECTED) with comprehensive reasoning."),
-        ("8. Audit & Communication", "Generates personalized vendor email drafts and records complete immutable execution logs in SQLite."),
+    p2_steps = [
+        ("1. Receiving Submission", "Initializes Run ID, text normalization, and privacy masking for tax/banking data."),
+        ("2. Checking Documents", "Validates presence, mime types (PDF/PNG/JPG), and size (<10MB) for GST, PAN, and Bank proof."),
+        ("3. Extracting PDF Text", "Extracts raw text streams from PDF files using PyMuPDF (with pypdf fallback)."),
+        ("4. Identifying Vendor Information", "Discovers PAN, GSTIN, IFSC, Account Number, and Entity Names via targeted regex & label parsing."),
+        ("5. Structuring Extracted Fields", "Builds structured records with confidence levels (HIGH/MED/LOW) and provenance tags."),
+        ("6. Comparing PAN & GST", "Cross-checks PAN doc vs. GST certificate embedded PAN vs. manual submission."),
+        ("7. Comparing Company & Bank", "Normalizes corporate suffixes to compare legal business name with bank account holder."),
+        ("8. Running Field Validations", "Executes statutory syntax checks on PAN, GSTIN, IFSC, and contact email."),
+        ("9. Running Duplicate Detection", "Queries SQLite approved vendors using SHA-256 hashes of tax identifiers."),
+        ("10. Running Restricted Checks", "Screens tax ID hashes against synthetic internal compliance risk registry."),
+        ("11. Generating Final Decision", "Deterministic priority engine assigns APPROVED, PENDING, or REJECTED."),
+        ("12. Creating Communication Draft", "Drafts personalized vendor notifications with actionable discrepancy resolution steps."),
+        ("13. Saving Execution History", "Commits full audit record, extraction metadata, and cross-check results into SQLite."),
     ]
 
-    for title, desc in steps:
-        st.markdown(f"**{title}** — {desc}")
+    for title, desc in p2_steps:
+        st.markdown(f"**Stage {title}** — {desc}")
 
     st.markdown("---")
     st.info(
-        "💡 **Evaluator Quick Start:** Jump directly to **'🚀 Demo Scenarios'** in the sidebar to test "
-        "all 5 pre-configured test scenarios (Happy Path, Missing Document, Bank Mismatch, Duplicate, and Restricted Vendor) in one click."
+        "💡 **Evaluator Quick Start:** Jump to **'🚀 Demo Scenarios'** in the sidebar to test "
+        "Phase 2 Document-Driven Scenarios with real synthetic PDFs generated on the fly!"
     )
 
 
 # ==============================================================================
-# PAGE 2: NEW VENDOR SUBMISSION FORM
+# PAGE 2: NEW VENDOR SUBMISSION FORM (WITH EXTRACTION REVIEW)
 # ==============================================================================
 elif nav_option == "📝 New Submission":
     render_header()
 
     st.markdown("### 📝 New Vendor Onboarding Registration")
-    st.caption("Submit vendor business details, banking information, and compliance documents for automated verification.")
+    st.caption("Upload compliance documents to automatically extract details or fill manually for cross-document verification.")
 
-    # Form actions: Pre-fill sample data
+    # Form pre-fill actions
     btn_col1, btn_col2 = st.columns([1, 4])
     with btn_col1:
         if st.button("📋 Pre-fill Valid Aster Labs Data", use_container_width=True):
@@ -387,14 +443,256 @@ elif nav_option == "📝 New Submission":
 
     fd = st.session_state.form_data
 
+    # -------------------------------------------------------------
+    # Document Upload Section (Placed prominently for Document Intelligence)
+    # -------------------------------------------------------------
+    st.markdown(
+        """
+        <div class="vf-section-title">
+            📄 Step 1: Upload Compliance Documents
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption("Upload PDF, PNG, or JPEG files (Max 10 MB each). The PyMuPDF engine extracts and compares fields across documents.")
+
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        gst_file = st.file_uploader(
+            "GST Registration Certificate *",
+            type=["pdf", "png", "jpg", "jpeg"],
+            key="up_gst_cert",
+        )
+    with d2:
+        pan_file = st.file_uploader(
+            "Company PAN Proof *",
+            type=["pdf", "png", "jpg", "jpeg"],
+            key="up_pan_proof",
+        )
+    with d3:
+        bank_file = st.file_uploader(
+            "Bank Proof / Cancelled Cheque *",
+            type=["pdf", "png", "jpg", "jpeg"],
+            key="up_bank_proof",
+        )
+
+    attach_sample_docs = st.checkbox(
+        "📎 Automatically attach synthetic verified PDF documents if upload is empty",
+        value=True if fd.get("company_name") else False,
+        help="Generates authentic text-based synthetic PDF documents in memory for testing without local files.",
+    )
+
+    # Helper function to get document metadata with real bytes
+    def build_doc_metadata(
+        gst_f, pan_f, bank_f, use_sample: bool, sample_pan: str, sample_gstin: str, sample_name: str, sample_holder: str
+    ) -> Dict[str, DocumentMetadata]:
+        docs = {}
+
+        # 1. PAN
+        if pan_f:
+            b = pan_f.getvalue()
+            docs["pan_proof"] = DocumentMetadata(
+                doc_type="pan_proof",
+                name="Company PAN Proof",
+                filename=pan_f.name,
+                size_bytes=len(b),
+                extension=Path(pan_f.name).suffix.lower(),
+                is_present=True,
+                raw_bytes=b,
+            )
+        elif use_sample:
+            b = generate_synthetic_pan_pdf(sample_pan or "ABCDE1234F", sample_name or "Aster Labs Private Limited")
+            docs["pan_proof"] = DocumentMetadata(
+                doc_type="pan_proof",
+                name="Company PAN Proof",
+                filename="synthetic_pan_card.pdf",
+                size_bytes=len(b),
+                extension=".pdf",
+                is_present=True,
+                raw_bytes=b,
+            )
+        else:
+            docs["pan_proof"] = DocumentMetadata(doc_type="pan_proof", name="Company PAN Proof", is_present=False)
+
+        # 2. GST
+        if gst_f:
+            b = gst_f.getvalue()
+            docs["gst_cert"] = DocumentMetadata(
+                doc_type="gst_cert",
+                name="GST Registration Certificate",
+                filename=gst_f.name,
+                size_bytes=len(b),
+                extension=Path(gst_f.name).suffix.lower(),
+                is_present=True,
+                raw_bytes=b,
+            )
+        elif use_sample:
+            b = generate_synthetic_gst_pdf(
+                sample_gstin or "27ABCDE1234F1Z5", sample_name or "Aster Labs Private Limited", sample_holder or "Aster Labs"
+            )
+            docs["gst_cert"] = DocumentMetadata(
+                doc_type="gst_cert",
+                name="GST Registration Certificate",
+                filename="synthetic_gst_certificate.pdf",
+                size_bytes=len(b),
+                extension=".pdf",
+                is_present=True,
+                raw_bytes=b,
+            )
+        else:
+            docs["gst_cert"] = DocumentMetadata(doc_type="gst_cert", name="GST Registration Certificate", is_present=False)
+
+        # 3. Bank Proof
+        if bank_f:
+            b = bank_f.getvalue()
+            docs["bank_proof"] = DocumentMetadata(
+                doc_type="bank_proof",
+                name="Bank Proof / Cancelled Cheque",
+                filename=bank_f.name,
+                size_bytes=len(b),
+                extension=Path(bank_f.name).suffix.lower(),
+                is_present=True,
+                raw_bytes=b,
+            )
+        elif use_sample:
+            b = generate_synthetic_bank_pdf(
+                sample_holder or "Aster Labs", "123456789012", "HDFC0001234", "HDFC Bank Ltd"
+            )
+            docs["bank_proof"] = DocumentMetadata(
+                doc_type="bank_proof",
+                name="Bank Proof / Cancelled Cheque",
+                filename="synthetic_cancelled_cheque.pdf",
+                size_bytes=len(b),
+                extension=".pdf",
+                is_present=True,
+                raw_bytes=b,
+            )
+        else:
+            docs["bank_proof"] = DocumentMetadata(doc_type="bank_proof", name="Bank Proof / Cancelled Cheque", is_present=False)
+
+        return docs
+
+    # Extraction Preview Button
+    if st.button("🔍 Extract & Review Document Fields (Phase 2)", use_container_width=False):
+        docs_to_extract = build_doc_metadata(
+            gst_file,
+            pan_file,
+            bank_file,
+            attach_sample_docs,
+            fd.get("pan", "ABCDE1234F"),
+            fd.get("gstin", "27ABCDE1234F1Z5"),
+            fd.get("company_name", "Aster Labs Private Limited"),
+            fd.get("bank_account_holder", "Aster Labs"),
+        )
+        pan_res = extract_pan_document(docs_to_extract["pan_proof"].raw_bytes, docs_to_extract["pan_proof"].filename or "")
+        gst_res = extract_gst_document(docs_to_extract["gst_cert"].raw_bytes, docs_to_extract["gst_cert"].filename or "")
+        bank_res = extract_bank_document(docs_to_extract["bank_proof"].raw_bytes, docs_to_extract["bank_proof"].filename or "")
+
+        st.session_state.extracted_review_data = {
+            "pan": pan_res,
+            "gst": gst_res,
+            "bank": bank_res,
+            "docs": docs_to_extract,
+        }
+
+    # -------------------------------------------------------------
+    # EXTRACTION REVIEW INTERFACE (Section 6 Requirement)
+    # -------------------------------------------------------------
+    if st.session_state.extracted_review_data:
+        st.markdown("---")
+        st.markdown("### 🔍 Document Extraction Review Screen")
+        st.caption("Review extracted fields before submitting. Check provenance, extraction status, and confidence levels.")
+
+        p_res = st.session_state.extracted_review_data["pan"]
+        g_res = st.session_state.extracted_review_data["gst"]
+        b_res = st.session_state.extracted_review_data["bank"]
+
+        review_table = [
+            {
+                "Field": "PAN Number",
+                "Extracted Value": p_res.extracted_fields.get("pan", "NOT EXTRACTED"),
+                "Source Document": "PAN Proof",
+                "Confidence": p_res.field_confidence.get("pan", "LOW"),
+                "Extraction Status": p_res.extraction_status.value,
+                "Manual Form Value": fd.get("pan", "Not entered"),
+            },
+            {
+                "Field": "Cardholder Name",
+                "Extracted Value": p_res.extracted_fields.get("name", "NOT EXTRACTED"),
+                "Source Document": "PAN Proof",
+                "Confidence": p_res.field_confidence.get("name", "LOW"),
+                "Extraction Status": p_res.extraction_status.value,
+                "Manual Form Value": fd.get("company_name", "Not entered"),
+            },
+            {
+                "Field": "GSTIN",
+                "Extracted Value": g_res.extracted_fields.get("gstin", "NOT EXTRACTED"),
+                "Source Document": "GST Certificate",
+                "Confidence": g_res.field_confidence.get("gstin", "LOW"),
+                "Extraction Status": g_res.extraction_status.value,
+                "Manual Form Value": fd.get("gstin", "Not entered"),
+            },
+            {
+                "Field": "Embedded PAN in GSTIN",
+                "Extracted Value": g_res.extracted_fields.get("embedded_pan", "NOT EXTRACTED"),
+                "Source Document": "GST Certificate",
+                "Confidence": g_res.field_confidence.get("embedded_pan", "LOW"),
+                "Extraction Status": g_res.extraction_status.value,
+                "Manual Form Value": fd.get("pan", "Not entered"),
+            },
+            {
+                "Field": "Legal Business Name",
+                "Extracted Value": g_res.extracted_fields.get("legal_name", "NOT EXTRACTED"),
+                "Source Document": "GST Certificate",
+                "Confidence": g_res.field_confidence.get("legal_name", "LOW"),
+                "Extraction Status": g_res.extraction_status.value,
+                "Manual Form Value": fd.get("company_name", "Not entered"),
+            },
+            {
+                "Field": "Account Holder Name",
+                "Extracted Value": b_res.extracted_fields.get("account_holder", "NOT EXTRACTED"),
+                "Source Document": "Bank Proof",
+                "Confidence": b_res.field_confidence.get("account_holder", "LOW"),
+                "Extraction Status": b_res.extraction_status.value,
+                "Manual Form Value": fd.get("bank_account_holder", "Not entered"),
+            },
+            {
+                "Field": "Account Number",
+                "Extracted Value": (
+                    f"********{b_res.extracted_fields.get('account_number')[-4:]}"
+                    if b_res.extracted_fields.get("account_number")
+                    else "NOT EXTRACTED"
+                ),
+                "Source Document": "Bank Proof",
+                "Confidence": b_res.field_confidence.get("account_number", "LOW"),
+                "Extraction Status": b_res.extraction_status.value,
+                "Manual Form Value": "••••••••" if fd.get("bank_account_number") else "Not entered",
+            },
+            {
+                "Field": "Bank IFSC Code",
+                "Extracted Value": b_res.extracted_fields.get("ifsc", "NOT EXTRACTED"),
+                "Source Document": "Bank Proof",
+                "Confidence": b_res.field_confidence.get("ifsc", "LOW"),
+                "Extraction Status": b_res.extraction_status.value,
+                "Manual Form Value": fd.get("ifsc_code", "Not entered"),
+            },
+        ]
+
+        st.dataframe(pd.DataFrame(review_table), use_container_width=True, hide_index=True)
+
+        # Highlight Warnings
+        all_warnings = p_res.warnings + g_res.warnings + b_res.warnings
+        if all_warnings:
+            st.warning("⚠️ **Extraction Warnings & Notices:**\n" + "\n".join([f"- {w}" for w in all_warnings]))
+
+    # -------------------------------------------------------------
+    # Step 2: Form Details & Submission
+    # -------------------------------------------------------------
     with st.form("vendor_onboarding_form", clear_on_submit=False):
-        # -------------------------------------------------------------
-        # Section A1: Business Information
-        # -------------------------------------------------------------
         st.markdown(
             """
             <div class="vf-section-title">
-                🏢 Section 1: Business & Corporate Identity
+                🏢 Step 2: Vendor Business & Banking Details
             </div>
             """,
             unsafe_allow_html=True,
@@ -454,17 +752,6 @@ elif nav_option == "📝 New Submission":
                 max_chars=15,
             ).upper()
 
-        # -------------------------------------------------------------
-        # Section A2: Banking Information
-        # -------------------------------------------------------------
-        st.markdown(
-            """
-            <div class="vf-section-title">
-                🏦 Section 2: Banking & Disbursement Details
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         b1, b2 = st.columns(2)
         with b1:
             bank_holder = st.text_input(
@@ -492,101 +779,27 @@ elif nav_option == "📝 New Submission":
                 placeholder="e.g. HDFC Bank Ltd",
             )
 
-        # -------------------------------------------------------------
-        # Section A3: Document Uploads
-        # -------------------------------------------------------------
-        st.markdown(
-            """
-            <div class="vf-section-title">
-                📄 Section 3: Mandatory Compliance Documents
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.caption("Upload clear PDF, PNG, or JPEG files (Max 10 MB each). The prototype verifies file presence, format, and size.")
-
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            gst_file = st.file_uploader(
-                "GST Registration Certificate *",
-                type=["pdf", "png", "jpg", "jpeg"],
-                key="up_gst_cert",
-            )
-        with d2:
-            pan_file = st.file_uploader(
-                "Company PAN Proof *",
-                type=["pdf", "png", "jpg", "jpeg"],
-                key="up_pan_proof",
-            )
-        with d3:
-            bank_file = st.file_uploader(
-                "Bank Proof / Cancelled Cheque *",
-                type=["pdf", "png", "jpg", "jpeg"],
-                key="up_bank_proof",
-            )
-
-        attach_sample_docs = st.checkbox(
-            "📎 Automatically attach sample verified documents (PDF/JPG/PNG) if upload is empty",
-            value=True if fd.get("company_name") else False,
-            help="Enables one-click testing without having to locate files on your computer.",
-        )
-
-        # -------------------------------------------------------------
-        # Section A4: Submit Action
-        # -------------------------------------------------------------
         st.markdown("<br>", unsafe_allow_html=True)
         submitted = st.form_submit_button(
-            "🚀 Run Onboarding Verification",
+            "🚀 Run Onboarding Verification (13-Stage Pipeline)",
             type="primary",
             use_container_width=True,
         )
 
     if submitted:
-        # Client side non-empty checks
         if not company_name.strip():
             st.error("Please enter a legal company name before submitting.")
         else:
-            # Process uploaded files into DocumentMetadata objects
-            docs_meta = {}
-
-            def process_upload(file_obj, key: str, label: str) -> DocumentMetadata:
-                if file_obj is not None:
-                    ext = Path(file_obj.name).suffix.lower()
-                    size = file_obj.size
-                    return DocumentMetadata(
-                        doc_type=key,
-                        name=label,
-                        filename=file_obj.name,
-                        size_bytes=size,
-                        extension=ext,
-                        is_present=True,
-                    )
-                elif attach_sample_docs:
-                    ext_map = {"gst_cert": ".pdf", "pan_proof": ".jpg", "bank_proof": ".png"}
-                    size_map = {"gst_cert": 245000, "pan_proof": 180000, "bank_proof": 310000}
-                    fname_map = {
-                        "gst_cert": "sample_gst_certificate.pdf",
-                        "pan_proof": "sample_company_pan.jpg",
-                        "bank_proof": "sample_cancelled_cheque.png",
-                    }
-                    return DocumentMetadata(
-                        doc_type=key,
-                        name=label,
-                        filename=fname_map.get(key, f"{key}.pdf"),
-                        size_bytes=size_map.get(key, 200000),
-                        extension=ext_map.get(key, ".pdf"),
-                        is_present=True,
-                    )
-                else:
-                    return DocumentMetadata(
-                        doc_type=key,
-                        name=label,
-                        is_present=False,
-                    )
-
-            docs_meta["gst_cert"] = process_upload(gst_file, "gst_cert", "GST Registration Certificate")
-            docs_meta["pan_proof"] = process_upload(pan_file, "pan_proof", "Company PAN Proof Document")
-            docs_meta["bank_proof"] = process_upload(bank_file, "bank_proof", "Bank Proof / Cancelled Cheque")
+            final_docs = build_doc_metadata(
+                gst_file,
+                pan_file,
+                bank_file,
+                attach_sample_docs,
+                pan,
+                gstin,
+                company_name,
+                bank_holder,
+            )
 
             submission_obj = VendorSubmission(
                 company_name=company_name,
@@ -601,7 +814,7 @@ elif nav_option == "📝 New Submission":
                 bank_account_number=bank_acc,
                 ifsc_code=ifsc,
                 bank_name=bank_name,
-                documents=docs_meta,
+                documents=final_docs,
                 run_type="Live Submission",
             )
 
@@ -609,7 +822,7 @@ elif nav_option == "📝 New Submission":
 
 
 # ==============================================================================
-# PAGE 3: DEMO SCENARIOS
+# PAGE 3: DEMO SCENARIOS (PHASE 1 & PHASE 2)
 # ==============================================================================
 elif nav_option == "🚀 Demo Scenarios":
     render_header()
@@ -617,196 +830,240 @@ elif nav_option == "🚀 Demo Scenarios":
     st.markdown("### 🚀 Built-in Synthetic Demonstration Scenarios")
     st.markdown(
         """
-        These pre-configured demonstration scenarios allow evaluators to immediately test the core happy path, 
-        edge cases, exception handling, and policy hard-stops without manually typing inputs or preparing files.
+        Test the end-to-end system using pre-configured test scenarios.
+        Tab 1 showcases **Phase 2 Document-Driven Intelligence** with real PDF parsing,
+        while Tab 2 preserves **Phase 1 Form-Driven Scenarios**.
         """
     )
-    st.info("ℹ️ **Notice:** All scenario records use synthetic data. They execute the exact same backend decision engine as real submissions.")
 
-    scenarios = [
-        {
-            "id": "scenario_a",
-            "name": "Scenario A: Happy Path",
-            "expected": "APPROVED",
-            "badge_color": "#16A34A",
-            "company": "Aster Labs Private Limited",
-            "desc": "Valid company name, matching PAN & GSTIN, clean bank account name alignment, and all 3 documents present.",
-            "data": {
-                "company_name": "Aster Labs Private Limited",
-                "country": "India",
-                "registration_type": "Private Limited",
-                "address": "Plot 42, Electronic City, Bangalore, Karnataka",
-                "contact_name": "Dr. Vikram Rao",
-                "contact_email": "ops@asterlabs.example",
-                "pan": "ABCDE1234F",
-                "gstin": "27ABCDE1234F1Z5",
-                "bank_account_holder": "Aster Labs",
-                "bank_account_number": "123456789012",
-                "ifsc_code": "HDFC0001234",
-                "bank_name": "HDFC Bank",
-                "docs": {"gst_cert": True, "pan_proof": True, "bank_proof": True},
+    tab_p2, tab_p1 = st.tabs(["📄 Phase 2: Document-Driven Intelligence", "📋 Phase 1: Form-Driven Verification"])
+
+    # -------------------------------------------------------------
+    # TAB 1: PHASE 2 DOCUMENT INTELLIGENCE SCENARIOS
+    # -------------------------------------------------------------
+    with tab_p2:
+        st.markdown("#### Phase 2 Scenarios: Text Extraction & Cross-Document Consistency")
+        st.caption("Each scenario generates authentic text-based PDF bytes dynamically in memory and parses them with PyMuPDF.")
+
+        p2_scenarios = [
+            {
+                "id": "p2_sc_a",
+                "name": "Scenario A: All Documents 100% Consistent",
+                "expected": "APPROVED",
+                "badge_color": "#16A34A",
+                "company": "Aster Labs Private Limited",
+                "desc": "Real synthetic PDFs for PAN, GSTIN, and Cancelled Cheque contain 100% matching identifiers, aligned company names, and valid formatting.",
+                "run": lambda: (
+                    generate_synthetic_pan_pdf("ABCDE1234F", "Aster Labs Private Limited"),
+                    generate_synthetic_gst_pdf("27ABCDE1234F1Z5", "Aster Labs Private Limited", "Aster Labs"),
+                    generate_synthetic_bank_pdf("Aster Labs", "123456789012", "HDFC0001234", "HDFC Bank Ltd"),
+                    "ABCDE1234F",
+                    "27ABCDE1234F1Z5",
+                    "Aster Labs Private Limited",
+                    "Aster Labs",
+                    "123456789012",
+                    "HDFC0001234",
+                ),
             },
-        },
-        {
-            "id": "scenario_b",
-            "name": "Scenario B: Missing Bank Document",
-            "expected": "PENDING",
-            "badge_color": "#D97706",
-            "company": "Bluewave Technologies Private Limited",
-            "desc": "Valid company and banking details, but the mandatory Bank Proof / Cancelled Cheque is missing.",
-            "data": {
-                "company_name": "Bluewave Technologies Private Limited",
-                "country": "India",
-                "registration_type": "Private Limited",
-                "address": "Level 5, Cyber Gateway, HITEC City, Hyderabad",
-                "contact_name": "Ramesh Kumar",
-                "contact_email": "finance@bluewavetech.example",
-                "pan": "BWAVE5678M",
-                "gstin": "36BWAVE5678M1Z8",
-                "bank_account_holder": "Bluewave Technologies Pvt Ltd",
-                "bank_account_number": "987654321098",
-                "ifsc_code": "ICIC0000456",
-                "bank_name": "ICICI Bank",
-                "docs": {"gst_cert": True, "pan_proof": True, "bank_proof": False},
+            {
+                "id": "p2_sc_b",
+                "name": "Scenario B: Cross-Document PAN Mismatch",
+                "expected": "PENDING",
+                "badge_color": "#D97706",
+                "company": "Bluewave Technologies Private Limited",
+                "desc": "PAN document extracts 'ABCDE1234F', but the GST Certificate PDF contains conflicting embedded PAN '36ZZZZZ9999Z1Z8'.",
+                "run": lambda: (
+                    generate_synthetic_pan_pdf("ABCDE1234F", "Bluewave Technologies Private Limited"),
+                    generate_synthetic_gst_pdf("36ZZZZZ9999Z1Z8", "Bluewave Technologies Private Limited"),
+                    generate_synthetic_bank_pdf("Bluewave Technologies", "987654321098", "ICIC0000456"),
+                    "ABCDE1234F",
+                    "36ZZZZZ9999Z1Z8",
+                    "Bluewave Technologies Private Limited",
+                    "Bluewave Technologies",
+                    "987654321098",
+                    "ICIC0000456",
+                ),
             },
-        },
-        {
-            "id": "scenario_c",
-            "name": "Scenario C: Bank Account Name Mismatch",
-            "expected": "PENDING",
-            "badge_color": "#D97706",
-            "company": "Brightline Systems Private Limited",
-            "desc": "Legal entity name is 'Brightline Systems', but bank account holder is 'Shree Trading Enterprises'. Requires manual ownership review.",
-            "data": {
-                "company_name": "Brightline Systems Private Limited",
-                "country": "India",
-                "registration_type": "Private Limited",
-                "address": "102 Industrial Estate, Peenya, Bangalore",
-                "contact_name": "Ananya Sen",
-                "contact_email": "accounts@brightline.example",
-                "pan": "BRGHT9999K",
-                "gstin": "29BRGHT9999K1Z2",
-                "bank_account_holder": "Shree Trading Enterprises",
-                "bank_account_number": "554433221100",
-                "ifsc_code": "SBIN0001234",
-                "bank_name": "State Bank of India",
-                "docs": {"gst_cert": True, "pan_proof": True, "bank_proof": True},
+            {
+                "id": "p2_sc_c",
+                "name": "Scenario C: Company vs. Bank Name Mismatch",
+                "expected": "PENDING",
+                "badge_color": "#D97706",
+                "company": "Brightline Systems Private Limited",
+                "desc": "GST Certificate PDF extracts 'Brightline Systems Private Limited', but the Cancelled Cheque PDF extracts 'Shree Trading Enterprises'.",
+                "run": lambda: (
+                    generate_synthetic_pan_pdf("BRGHT9999K", "Brightline Systems Private Limited"),
+                    generate_synthetic_gst_pdf("29BRGHT9999K1Z2", "Brightline Systems Private Limited"),
+                    generate_synthetic_bank_pdf("Shree Trading Enterprises", "554433221100", "SBIN0001234"),
+                    "BRGHT9999K",
+                    "29BRGHT9999K1Z2",
+                    "Brightline Systems Private Limited",
+                    "Shree Trading Enterprises",
+                    "554433221100",
+                    "SBIN0001234",
+                ),
             },
-        },
-        {
-            "id": "scenario_d",
-            "name": "Scenario D: Duplicate Vendor Registration",
-            "expected": "PENDING",
-            "badge_color": "#D97706",
-            "company": "Northstar Office Supplies Private Limited",
-            "desc": "Tax identifiers (PAN LMNOP1234Q & GSTIN 27LMNOP1234Q1Z5) match a pre-existing approved vendor in the registry.",
-            "data": {
-                "company_name": "Northstar Office Supplies Private Limited",
-                "country": "India",
-                "registration_type": "Private Limited",
-                "address": "12 MG Road, Fort, Mumbai",
-                "contact_name": "Sanjay Mehta",
-                "contact_email": "sales@northstar.example",
+            {
+                "id": "p2_sc_d",
+                "name": "Scenario D: Unreadable / Scanned Document Fallback",
+                "expected": "PENDING",
+                "badge_color": "#D97706",
+                "company": "Aster Labs Private Limited",
+                "desc": "PAN document PDF contains no selectable text (simulating an image scan). Extractor flags UNREADABLE and halts for manual review without inventing fake values.",
+                "run": lambda: (
+                    generate_unreadable_pdf(),
+                    generate_synthetic_gst_pdf("27ABCDE1234F1Z5", "Aster Labs Private Limited"),
+                    generate_synthetic_bank_pdf("Aster Labs", "123456789012", "HDFC0001234"),
+                    "ABCDE1234F",
+                    "27ABCDE1234F1Z5",
+                    "Aster Labs Private Limited",
+                    "Aster Labs",
+                    "123456789012",
+                    "HDFC0001234",
+                ),
+            },
+        ]
+
+        for sc in p2_scenarios:
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.02);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <h4 style="margin: 0; font-size: 1.1rem; color: #1E293B;">{sc['name']}</h4>
+                            <span style="background: {sc['badge_color']}; color: white; padding: 3px 10px; border-radius: 6px; font-size: 0.78rem; font-weight: 700;">
+                                Expected: {sc['expected']}
+                            </span>
+                        </div>
+                        <p style="margin: 0 0 10px 0; font-size: 0.9rem; color: #475569;">{sc['desc']}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if st.button(f"⚡ Execute {sc['name']}", key=f"btn_{sc['id']}"):
+                    pan_b, gst_b, bank_b, pan_v, gstin_v, comp_v, holder_v, acc_v, ifsc_v = sc["run"]()
+                    docs_meta = {
+                        "pan_proof": DocumentMetadata(
+                            doc_type="pan_proof",
+                            name="Company PAN Proof",
+                            filename="pan_card.pdf",
+                            size_bytes=len(pan_b),
+                            extension=".pdf",
+                            is_present=True,
+                            raw_bytes=pan_b,
+                        ),
+                        "gst_cert": DocumentMetadata(
+                            doc_type="gst_cert",
+                            name="GST Registration Certificate",
+                            filename="gst_certificate.pdf",
+                            size_bytes=len(gst_b),
+                            extension=".pdf",
+                            is_present=True,
+                            raw_bytes=gst_b,
+                        ),
+                        "bank_proof": DocumentMetadata(
+                            doc_type="bank_proof",
+                            name="Bank Proof / Cancelled Cheque",
+                            filename="cancelled_cheque.pdf",
+                            size_bytes=len(bank_b),
+                            extension=".pdf",
+                            is_present=True,
+                            raw_bytes=bank_b,
+                        ),
+                    }
+                    sub = VendorSubmission(
+                        company_name=comp_v,
+                        country="India",
+                        registration_type="Private Limited",
+                        address="Plot 42, Electronic City, Bangalore",
+                        contact_name="Dr. Vikram Rao",
+                        contact_email="ops@vendor.example",
+                        pan=pan_v,
+                        gstin=gstin_v,
+                        bank_account_holder=holder_v,
+                        bank_account_number=acc_v,
+                        ifsc_code=ifsc_v,
+                        bank_name="HDFC Bank Ltd",
+                        documents=docs_meta,
+                        run_type="Demo Scenario",
+                    )
+                    execute_and_display_workflow(sub)
+
+    # -------------------------------------------------------------
+    # TAB 2: PHASE 1 FORM-DRIVEN SCENARIOS (Preserved)
+    # -------------------------------------------------------------
+    with tab_p1:
+        st.markdown("#### Phase 1 Scenarios: Form-Based Validation")
+        st.caption("Preserves original Phase 1 tests for duplicate detection, restricted watchlists, and metadata validation.")
+
+        p1_scenarios = [
+            {
+                "id": "p1_sc_d",
+                "name": "Phase 1 Scenario D: Duplicate Vendor Registration",
+                "expected": "PENDING",
+                "badge_color": "#D97706",
+                "company": "Northstar Office Supplies Private Limited",
+                "desc": "Tax identifiers (PAN LMNOP1234Q & GSTIN 27LMNOP1234Q1Z5) match a pre-existing approved vendor in SQLite.",
                 "pan": "LMNOP1234Q",
                 "gstin": "27LMNOP1234Q1Z5",
-                "bank_account_holder": "Northstar Office Supplies",
-                "bank_account_number": "223344556677",
-                "ifsc_code": "KKBK0000123",
-                "bank_name": "Kotak Mahindra Bank",
-                "docs": {"gst_cert": True, "pan_proof": True, "bank_proof": True},
+                "holder": "Northstar Office Supplies",
             },
-        },
-        {
-            "id": "scenario_e",
-            "name": "Scenario E: Internal Restricted-Vendor Match",
-            "expected": "REJECTED",
-            "badge_color": "#DC2626",
-            "company": "Redwood Logistics LLP",
-            "desc": "Tax identifier matches synthetic internal restricted watchlist entry. Triggers hard-stop and stops onboarding immediately.",
-            "data": {
-                "company_name": "Redwood Logistics LLP",
-                "country": "India",
-                "registration_type": "Limited Liability Partnership (LLP)",
-                "address": "Transport Nagar, Sector 4, Gandhinagar",
-                "contact_name": "Karan Verma",
-                "contact_email": "legal@redwoodlogistics.example",
+            {
+                "id": "p1_sc_e",
+                "name": "Phase 1 Scenario E: Internal Restricted Watchlist Hard-Stop",
+                "expected": "REJECTED",
+                "badge_color": "#DC2626",
+                "company": "Redwood Logistics LLP",
+                "desc": "Tax identifier (PAN UVWXY5678Z) matches internal compliance risk registry. Triggers immediate hard-stop.",
                 "pan": "UVWXY5678Z",
                 "gstin": "29UVWXY5678Z1Z5",
-                "bank_account_holder": "Redwood Logistics LLP",
-                "bank_account_number": "998877665544",
-                "ifsc_code": "AXIS0000789",
-                "bank_name": "Axis Bank",
-                "docs": {"gst_cert": True, "pan_proof": True, "bank_proof": True},
+                "holder": "Redwood Logistics LLP",
             },
-        },
-    ]
+        ]
 
-    for sc in scenarios:
-        with st.container():
-            st.markdown(
-                f"""
-                <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.02);">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <h4 style="margin: 0; font-size: 1.1rem; color: #1E293B;">{sc['name']}</h4>
-                        <span style="background: {sc['badge_color']}; color: white; padding: 3px 10px; border-radius: 6px; font-size: 0.78rem; font-weight: 700;">
-                            Expected: {sc['expected']}
-                        </span>
+        for sc in p1_scenarios:
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.02);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <h4 style="margin: 0; font-size: 1.1rem; color: #1E293B;">{sc['name']}</h4>
+                            <span style="background: {sc['badge_color']}; color: white; padding: 3px 10px; border-radius: 6px; font-size: 0.78rem; font-weight: 700;">
+                                Expected: {sc['expected']}
+                            </span>
+                        </div>
+                        <p style="margin: 0 0 10px 0; font-size: 0.9rem; color: #475569;">{sc['desc']}</p>
                     </div>
-                    <p style="margin: 0 0 10px 0; font-size: 0.9rem; color: #475569;">{sc['desc']}</p>
-                    <div style="font-size: 0.82rem; color: #64748B;">
-                        <strong>Vendor:</strong> {sc['company']} | <strong>PAN:</strong> {sc['data']['pan']} | <strong>GSTIN:</strong> {sc['data']['gstin']}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            if st.button(f"⚡ Execute {sc['name']}", key=f"btn_{sc['id']}"):
-                d_flags = sc["data"]["docs"]
-                docs_meta = {
-                    "gst_cert": DocumentMetadata(
-                        doc_type="gst_cert",
-                        name="GST Registration Certificate",
-                        filename="gst_certificate.pdf" if d_flags.get("gst_cert") else None,
-                        size_bytes=245000 if d_flags.get("gst_cert") else 0,
-                        extension=".pdf",
-                        is_present=d_flags.get("gst_cert", False),
-                    ),
-                    "pan_proof": DocumentMetadata(
-                        doc_type="pan_proof",
-                        name="Company PAN Proof Document",
-                        filename="company_pan.jpg" if d_flags.get("pan_proof") else None,
-                        size_bytes=180000 if d_flags.get("pan_proof") else 0,
-                        extension=".jpg",
-                        is_present=d_flags.get("pan_proof", False),
-                    ),
-                    "bank_proof": DocumentMetadata(
-                        doc_type="bank_proof",
-                        name="Bank Proof / Cancelled Cheque",
-                        filename="cancelled_cheque.png" if d_flags.get("bank_proof") else None,
-                        size_bytes=310000 if d_flags.get("bank_proof") else 0,
-                        extension=".png",
-                        is_present=d_flags.get("bank_proof", False),
-                    ),
-                }
-
-                sub = VendorSubmission(
-                    company_name=sc["data"]["company_name"],
-                    country=sc["data"]["country"],
-                    registration_type=sc["data"]["registration_type"],
-                    address=sc["data"]["address"],
-                    contact_name=sc["data"]["contact_name"],
-                    contact_email=sc["data"]["contact_email"],
-                    pan=sc["data"]["pan"],
-                    gstin=sc["data"]["gstin"],
-                    bank_account_holder=sc["data"]["bank_account_holder"],
-                    bank_account_number=sc["data"]["bank_account_number"],
-                    ifsc_code=sc["data"]["ifsc_code"],
-                    bank_name=sc["data"]["bank_name"],
-                    documents=docs_meta,
-                    run_type="Demo Scenario",
+                    """,
+                    unsafe_allow_html=True,
                 )
-                execute_and_display_workflow(sub)
+
+                if st.button(f"⚡ Execute {sc['name']}", key=f"btn_{sc['id']}"):
+                    pan_b = generate_synthetic_pan_pdf(sc["pan"], sc["company"])
+                    gst_b = generate_synthetic_gst_pdf(sc["gstin"], sc["company"])
+                    bank_b = generate_synthetic_bank_pdf(sc["holder"], "223344556677", "KKBK0000123")
+                    docs_meta = {
+                        "pan_proof": DocumentMetadata("pan_proof", "Company PAN Proof", "pan_card.pdf", len(pan_b), ".pdf", True, raw_bytes=pan_b),
+                        "gst_cert": DocumentMetadata("gst_cert", "GST Certificate", "gst_cert.pdf", len(gst_b), ".pdf", True, raw_bytes=gst_b),
+                        "bank_proof": DocumentMetadata("bank_proof", "Bank Proof", "bank_proof.pdf", len(bank_b), ".pdf", True, raw_bytes=bank_b),
+                    }
+                    sub = VendorSubmission(
+                        company_name=sc["company"],
+                        country="India",
+                        registration_type="Private Limited",
+                        address="12 MG Road, Mumbai",
+                        contact_name="Operations Manager",
+                        contact_email="ops@vendor.example",
+                        pan=sc["pan"],
+                        gstin=sc["gstin"],
+                        bank_account_holder=sc["holder"],
+                        bank_account_number="223344556677",
+                        ifsc_code="KKBK0000123",
+                        documents=docs_meta,
+                        run_type="Demo Scenario",
+                    )
+                    execute_and_display_workflow(sub)
 
 
 # ==============================================================================
@@ -818,8 +1075,8 @@ elif nav_option == "📊 Execution Dashboard":
     st.markdown("### 📊 Verification Execution Dashboard")
     st.caption("Complete persistent audit trail of all automated onboarding executions queried directly from SQLite.")
 
-    # Dynamic metrics
-    m1, m2, m3, m4, m5 = st.columns(5)
+    # Dynamic metrics including Phase 2 stats
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
         render_metric_card("Total Executions", metrics["total_submissions"])
     with m2:
@@ -830,6 +1087,8 @@ elif nav_option == "📊 Execution Dashboard":
         render_metric_card("Rejected", metrics["rejected"], color_hint="#DC2626")
     with m5:
         render_metric_card("Approval Rate", f"{metrics['approval_rate']}%", color_hint="#2563EB")
+    with m6:
+        render_metric_card("Discrepancies", metrics.get("discrepancies_identified", 0), color_hint="#D97706")
 
     st.markdown("---")
 
@@ -852,7 +1111,6 @@ elif nav_option == "📊 Execution Dashboard":
         st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
         refresh_btn = st.button("🔄 Refresh Data", use_container_width=True)
 
-    # Format date filter strings if selected
     start_dt = f"{date_filter}T00:00:00" if date_filter else None
     end_dt = f"{date_filter}T23:59:59" if date_filter else None
 
@@ -868,7 +1126,6 @@ elif nav_option == "📊 Execution Dashboard":
     if not all_runs:
         st.info("No execution runs match the specified filter criteria.")
     else:
-        # Prepare tabular presentation
         table_rows = []
         for r in all_runs:
             table_rows.append(
@@ -879,6 +1136,8 @@ elif nav_option == "📊 Execution Dashboard":
                     "Timestamp (UTC)": r["created_at"][:19].replace("T", " "),
                     "Duration (ms)": f"{r['processing_duration_ms']:.1f}",
                     "Issues Count": r["issues_count"],
+                    "Docs Processed": r.get("documents_processed_count", 0),
+                    "Discrepancies": r.get("discrepancies_count", 0),
                     "Run Type": r["run_type"],
                 }
             )
@@ -889,15 +1148,11 @@ elif nav_option == "📊 Execution Dashboard":
             df,
             use_container_width=True,
             column_config={
-                "Status": st.column_config.TextColumn(
-                    "Status",
-                    help="Onboarding Decision Outcome",
-                ),
+                "Status": st.column_config.TextColumn("Status", help="Onboarding Decision Outcome"),
             },
             hide_index=True,
         )
 
-        # CSV Export Option
         csv_buffer = io.StringIO()
         df.to_csv(csv_buffer, index=False)
         st.download_button(
@@ -909,7 +1164,7 @@ elif nav_option == "📊 Execution Dashboard":
 
         st.markdown("---")
         st.markdown("### 🔍 Historical Run Inspector")
-        st.caption("Select any past execution to inspect its audit stages, masked inputs, and generated communication draft.")
+        st.caption("Select any past execution to inspect its audit stages, document extraction results, and cross-checks.")
 
         run_id_list = [r["run_id"] for r in all_runs]
         selected_run_id = st.selectbox("Select Run ID to Inspect:", run_id_list)
@@ -917,7 +1172,6 @@ elif nav_option == "📊 Execution Dashboard":
         if selected_run_id:
             run_data = get_run_by_id(selected_run_id, DB_PATH)
             if run_data:
-                # Header card for inspected run
                 render_decision_banner(
                     status=run_data["status"],
                     summary=run_data["decision"].get("summary", ""),
@@ -925,18 +1179,18 @@ elif nav_option == "📊 Execution Dashboard":
                     run_id=run_data["run_id"],
                 )
 
-                # Tabbed inspection view
-                tab1, tab2, tab3, tab4 = st.tabs(
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(
                     [
-                        "📋 Execution Stages",
-                        "🔒 Redacted Inputs & Document Metadata",
+                        "📋 13-Stage Audit Trail",
+                        "📄 Document Extraction & Cross-Checks",
+                        "🔒 Redacted Inputs",
                         "✉️ Communication Draft",
                         "📄 Raw Audit JSON",
                     ]
                 )
 
                 with tab1:
-                    st.markdown("#### Processing Stages Audit Trail")
+                    st.markdown("#### Execution Stages Audit Trail")
                     for s in run_data["stage_results"]:
                         render_stage_card(
                             stage_number=s["stage_number"],
@@ -948,8 +1202,24 @@ elif nav_option == "📊 Execution Dashboard":
                         )
 
                 with tab2:
+                    st.markdown("#### Phase 2 Document Intelligence & Cross-Verification")
+                    ext_data = run_data.get("extraction_results", {})
+                    cross_data = run_data.get("cross_document_results", {})
+
+                    if ext_data:
+                        st.markdown("##### Extracted Document Payloads")
+                        st.json(ext_data)
+
+                    if cross_data:
+                        st.markdown("##### Cross-Document Verification Outcomes")
+                        checks = cross_data.get("checks", [])
+                        if checks:
+                            st.dataframe(pd.DataFrame(checks), use_container_width=True, hide_index=True)
+                        if cross_data.get("discrepancies"):
+                            st.warning("Discrepancies:\n" + "\n".join([f"- {d}" for d in cross_data["discrepancies"]]))
+
+                with tab3:
                     st.markdown("#### Privacy-Safe Masked Vendor Submission")
-                    st.caption("Demonstrating secure redaction: Complete tax numbers and bank accounts are never exposed.")
                     inp = run_data["redacted_input"]
                     c_i1, c_i2 = st.columns(2)
                     with c_i1:
@@ -968,7 +1238,7 @@ elif nav_option == "📊 Execution Dashboard":
                     st.markdown("##### Documents Processed")
                     st.json(inp.get("documents_summary", {}))
 
-                with tab3:
+                with tab4:
                     st.markdown("#### Generated Communication Draft")
                     st.text_area(
                         "Communication Draft",
@@ -977,61 +1247,56 @@ elif nav_option == "📊 Execution Dashboard":
                         disabled=True,
                     )
 
-                with tab4:
+                with tab5:
                     st.markdown("#### Full Audit Record")
                     st.json(run_data)
 
 
 # ==============================================================================
-# PAGE 5: VALIDATION RULES & SYSTEM LIMITATIONS
+# PAGE 5: VALIDATION RULES & SYSTEM ARCHITECTURE
 # ==============================================================================
 elif nav_option == "📖 Validation Rules & Limits":
     render_header()
 
-    st.markdown("### 📖 Deterministic Validation Rules & System Architecture")
+    st.markdown("### 📖 Phase 2 Document-Driven Verification Architecture")
 
-    tab_r1, tab_r2 = st.tabs(["⚙️ Configured Validation Logic", "⚠️ Honest Limitations & Boundaries"])
+    tab_r1, tab_r2 = st.tabs(["⚙️ Document Extraction & Cross-Checks", "⚠️ Honest Limitations & Scope Boundaries"])
 
     with tab_r1:
         st.markdown(
             """
-            #### 1. Identity & Format Rules
-            - **Company Name:** Non-empty, 2 to 150 characters.
-            - **Supported Country:** India only (`India`, `IN`). All other countries flagged as PENDING for manual cross-border review.
-            - **PAN Format:** `^[A-Z]{5}[0-9]{4}[A-Z]$` (5 letters, 4 numbers, 1 letter, e.g. `ABCDE1234F`).
-            - **GSTIN Structural Format:** `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$` (15 alphanumeric characters).
-            - **IFSC Format:** `^[A-Z]{4}0[A-Z0-9]{6}$` (11 characters, 5th character '0').
-            - **Bank Account Number:** Numeric only, 9 to 18 digits.
+            #### 1. Document Extraction Architecture
+            - **Text Stream Extraction:** Uses **PyMuPDF** (`pymupdf.open`) with `pypdf` fallback to extract clean text streams from PDF compliance documents.
+            - **Structured Regex Matching:**
+              - **PAN Extraction:** `\\b([A-Z]{5}[0-9]{4}[A-Z])\\b` (Evaluated on PAN card text).
+              - **GSTIN Extraction:** `\\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\\b` (Evaluated on GST Certificate).
+              - **Embedded PAN Extraction:** Characters 2 to 11 of the extracted GSTIN.
+              - **Bank IFSC Extraction:** `\\b([A-Z]{4}0[A-Z0-9]{6})\\b`.
+              - **Bank Account Number:** `(?:ACCOUNT\\s*NUMBER|A/C\\s*NO)[:\\s]*([0-9]{9,18})`.
+            - **Label-Based Name Extraction:** Parses legal entity names, trade names, and account holder names from text labels.
+            - **Confidence Rating:** Assigns `HIGH`, `MEDIUM`, or `LOW` confidence reflecting extraction reliability.
 
-            #### 2. Compliance Document Rules
-            - **Required Types:** GST Certificate (`gst_cert`), PAN Document (`pan_proof`), Bank Proof / Cancelled Cheque (`bank_proof`).
-            - **Supported Formats:** `.pdf`, `.png`, `.jpg`, `.jpeg`.
-            - **Size Boundary:** Maximum 10 MB per file.
-            - **Validation Level:** Presence, valid extension, and positive size check.
+            #### 2. Cross-Document Consistency Matrix
+            - **Cross-Check 1 (PAN):** Compares PAN from PAN Proof vs. PAN embedded in GSTIN vs. Manual Entry. All must match.
+            - **Cross-Check 2 (Legal Entity Name):** Compares name from PAN Proof vs. Legal name from GST Certificate vs. Manual Company Name. Normalizes legal suffixes (`PRIVATE LIMITED`, `PVT LTD`, `LLP`, `LTD`).
+            - **Cross-Check 3 (Bank Account Holder):** Compares bank account holder name against verified legal entity name. Material differences result in **PENDING** for manual ownership review.
+            - **Cross-Check 4 (GSTIN & Banking Alignment):** Confirms document values match manual form entries.
 
-            #### 3. Cross-Field Consistency Checks
-            - **Embedded PAN in GSTIN:** Characters at index 2 to 11 of the 15-character GSTIN must match the separately submitted PAN.
-            - **Entity Name Alignment:** Compares legal company name with bank account holder name after stripping legal entity suffixes (`PRIVATE LIMITED`, `PVT LTD`, `LLP`, `LTD`, etc.) and non-alphanumeric punctuation. Material differences require manual verification.
-
-            #### 4. Cryptographic Duplicate & Restricted Screening
-            - Normalizes PAN and GSTIN and generates SHA-256 hashes (`hashlib.sha256(val.encode('utf-8')).hexdigest()`).
-            - **Duplicate Check:** Queries `approved_vendors` table in SQLite. If matched, triggers PENDING to prevent re-registration.
-            - **Restricted Check:** Queries `restricted_vendors` table in SQLite. If matched, triggers immediate REJECTED hard-stop.
+            #### 3. Unreadable Documents & Manual Fallback
+            - If a document contains no selectable text (scanned image), it is flagged as `UNREADABLE`.
+            - The system halts automated clearance and requests manual review or user confirmation.
+            - **Never invents values.** Unreadable documents are never marked as verified without human sign-off.
             """
         )
 
     with tab_r2:
         st.markdown(
             """
-            #### Honest Scope Boundaries (PS-2 Case Study Prototype)
-            In accordance with engineering integrity and realistic prototype scoping:
-
-            1. **India-Specific Jurisdiction Only:** The prototype is configured for Indian tax and banking structures (PAN, GSTIN, IFSC). Cross-border jurisdictions are routed to PENDING.
-            2. **Structural Validation vs. Live Government Verification:** PAN and GSTIN are structurally validated against official syntax rules; they are not queried against live Income Tax or GSTN government APIs.
-            3. **Banking Network Verification:** Bank account format and IFSC syntax are verified; actual bank account ownership is not confirmed against live banking networks (penny-drop API / IMPS).
-            4. **Document Integrity vs. Certificate OCR:** Uploaded documents are verified for presence, allowed file format, and file size limits. The prototype does not claim OCR extraction or tamper authentication.
-            5. **Synthetic Restricted Registry:** The internal restricted-vendor registry is synthetic and built for demonstration; it does not replace a production OFAC/UN/sanctions screening engine.
-            6. **Communication Drafting Only:** Actionable email drafts are generated dynamically for review; automated SMTP email transmission is intentionally omitted.
-            7. **Human in the Loop:** Automated approval marks preliminary technical verification. Real-world vendor activation and payment authorization always remains with an authorized human procurement officer.
+            #### Honest Scope Boundaries (Phase 2 Prototype)
+            1. **Selectable Text PDFs vs Heavy OCR:** The extractor uses high-performance native PDF stream extraction (PyMuPDF). It does not require external paid OCR APIs (Tesseract/Google Vision). Scanned PDFs without text streams are safely routed to manual confirmation.
+            2. **No External LLM Dependencies:** All extraction, regex parsing, and cross-checks run deterministically on CPU in milliseconds without external LLM API costs or token latency.
+            3. **Structural Validation vs Live Government Gateways:** Extracted tax identifiers are validated for statutory structural syntax and cross-document alignment, not queried against live government portals (NSDL/GSTN).
+            4. **Banking Routing vs Penny-Drop Verification:** IFSC syntax and account number length are verified. Bank account ownership is not authenticated against real inter-bank networks (IMPS).
+            5. **Human in the Loop:** Automated approval marks technical compliance clearance. Real-world vendor activation and payment release remains under human procurement authority.
             """
         )

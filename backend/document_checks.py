@@ -60,6 +60,7 @@ def check_documents(
                 is_present=True,
                 status=DocumentStatus.MISSING,
                 detail="Uploaded file is empty (0 bytes).",
+                raw_bytes=doc.raw_bytes,
             )
             updated_docs[doc_key] = meta
             issues.append(
@@ -87,6 +88,7 @@ def check_documents(
                 is_present=True,
                 status=DocumentStatus.INVALID_FORMAT,
                 detail=f"Unsupported file format '{ext}'. Allowed formats: PDF, PNG, JPG, JPEG.",
+                raw_bytes=doc.raw_bytes,
             )
             updated_docs[doc_key] = meta
             issues.append(
@@ -111,6 +113,7 @@ def check_documents(
                 is_present=True,
                 status=DocumentStatus.INVALID_SIZE,
                 detail=f"File size exceeds 10 MB limit ({size_mb:.2f} MB).",
+                raw_bytes=doc.raw_bytes,
             )
             updated_docs[doc_key] = meta
             issues.append(
@@ -134,6 +137,7 @@ def check_documents(
             is_present=True,
             status=DocumentStatus.PASS,
             detail=f"Valid format ({ext.upper()}) and size ({size_kb:.1f} KB).",
+            raw_bytes=doc.raw_bytes,
         )
         updated_docs[doc_key] = meta
         passed.append(f"{doc_name} verified: '{doc.filename}' ({ext.upper()}, {size_kb:.1f} KB)")

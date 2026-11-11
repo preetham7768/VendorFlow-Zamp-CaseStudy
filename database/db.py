@@ -54,10 +54,29 @@ def init_db(db_path: Optional[Path] = None) -> None:
                     redacted_input_json TEXT NOT NULL,
                     stage_results_json TEXT NOT NULL,
                     decision_json TEXT NOT NULL,
-                    communication_draft TEXT NOT NULL
+                    communication_draft TEXT NOT NULL,
+                    extraction_results_json TEXT DEFAULT '{}',
+                    cross_document_results_json TEXT DEFAULT '{}',
+                    documents_processed_count INTEGER DEFAULT 0,
+                    discrepancies_count INTEGER DEFAULT 0,
+                    manual_confirmations_count INTEGER DEFAULT 0
                 )
                 """
             )
+
+            # Migration for Phase 2 columns if table existed prior
+            cursor.execute("PRAGMA table_info(runs)")
+            existing_cols = {row["name"] for row in cursor.fetchall()}
+            p2_cols = [
+                ("extraction_results_json", "TEXT DEFAULT '{}'"),
+                ("cross_document_results_json", "TEXT DEFAULT '{}'"),
+                ("documents_processed_count", "INTEGER DEFAULT 0"),
+                ("discrepancies_count", "INTEGER DEFAULT 0"),
+                ("manual_confirmations_count", "INTEGER DEFAULT 0"),
+            ]
+            for col_name, col_def in p2_cols:
+                if col_name not in existing_cols:
+                    cursor.execute(f"ALTER TABLE runs ADD COLUMN {col_name} {col_def}")
 
             # Table 2: approved_vendors
             cursor.execute(
@@ -166,9 +185,11 @@ def save_run(run_data: Dict[str, Any], db_path: Optional[Path] = None) -> None:
                 INSERT INTO runs (
                     run_id, created_at, vendor_name, status, processing_duration_ms,
                     run_type, issues_count, redacted_input_json, stage_results_json,
-                    decision_json, communication_draft
+                    decision_json, communication_draft, extraction_results_json,
+                    cross_document_results_json, documents_processed_count,
+                    discrepancies_count, manual_confirmations_count
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_data["run_id"],
@@ -182,6 +203,11 @@ def save_run(run_data: Dict[str, Any], db_path: Optional[Path] = None) -> None:
                     json.dumps(run_data.get("stage_results", [])),
                     json.dumps(run_data.get("decision", {})),
                     run_data.get("communication_draft", ""),
+                    json.dumps(run_data.get("extraction_results", {})),
+                    json.dumps(run_data.get("cross_document_results", {})),
+                    run_data.get("documents_processed_count", 0),
+                    run_data.get("discrepancies_count", 0),
+                    run_data.get("manual_confirmations_count", 0),
                 ),
             )
     finally:
@@ -322,6 +348,11 @@ def get_all_runs(
                     "stage_results": json.loads(r["stage_results_json"]),
                     "decision": json.loads(r["decision_json"]),
                     "communication_draft": r["communication_draft"],
+                    "extraction_results": json.loads(r["extraction_results_json"] or "{}") if "extraction_results_json" in r.keys() else {},
+                    "cross_document_results": json.loads(r["cross_document_results_json"] or "{}") if "cross_document_results_json" in r.keys() else {},
+                    "documents_processed_count": r["documents_processed_count"] if "documents_processed_count" in r.keys() else 0,
+                    "discrepancies_count": r["discrepancies_count"] if "discrepancies_count" in r.keys() else 0,
+                    "manual_confirmations_count": r["manual_confirmations_count"] if "manual_confirmations_count" in r.keys() else 0,
                 }
             )
         return runs
@@ -350,6 +381,11 @@ def get_run_by_id(run_id: str, db_path: Optional[Path] = None) -> Optional[Dict[
             "stage_results": json.loads(r["stage_results_json"]),
             "decision": json.loads(r["decision_json"]),
             "communication_draft": r["communication_draft"],
+            "extraction_results": json.loads(r["extraction_results_json"] or "{}") if "extraction_results_json" in r.keys() else {},
+            "cross_document_results": json.loads(r["cross_document_results_json"] or "{}") if "cross_document_results_json" in r.keys() else {},
+            "documents_processed_count": r["documents_processed_count"] if "documents_processed_count" in r.keys() else 0,
+            "discrepancies_count": r["discrepancies_count"] if "discrepancies_count" in r.keys() else 0,
+            "manual_confirmations_count": r["manual_confirmations_count"] if "manual_confirmations_count" in r.keys() else 0,
         }
     finally:
         conn.close()
@@ -374,12 +410,28 @@ def get_dashboard_metrics(db_path: Optional[Path] = None) -> Dict[str, Any]:
 
         approval_rate = (approved / total * 100.0) if total > 0 else 0.0
 
+        cursor.execute("PRAGMA table_info(runs)")
+        cols = {row["name"] for row in cursor.fetchall()}
+
+        docs_count = 0
+        discrepancies_count = 0
+        confirmations_count = 0
+        if "documents_processed_count" in cols:
+            cursor.execute("SELECT SUM(documents_processed_count) as s_docs, SUM(discrepancies_count) as s_disc, SUM(manual_confirmations_count) as s_conf FROM runs")
+            row = cursor.fetchone()
+            docs_count = row["s_docs"] or 0
+            discrepancies_count = row["s_disc"] or 0
+            confirmations_count = row["s_conf"] or 0
+
         return {
             "total_submissions": total,
             "approved": approved,
             "pending": pending,
             "rejected": rejected,
             "approval_rate": round(approval_rate, 1),
+            "documents_processed": docs_count,
+            "discrepancies_identified": discrepancies_count,
+            "manual_confirmations": confirmations_count,
         }
     finally:
         conn.close()

@@ -55,13 +55,19 @@ def make_decision(
 
         # Construct specific next steps based on issue fields
         field_set = {i.field_name for i in actionable_issues}
+        if "pan_inconsistency" in field_set:
+            next_steps.append("Resolve PAN discrepancy across uploaded PAN proof and GST certificate.")
+        if "company_name_inconsistency" in field_set:
+            next_steps.append("Submit clarification letter or corporate resolution explaining legal name variation.")
+        if "unreadable_document" in field_set:
+            next_steps.append("Upload legible text-based PDF or complete manual document field confirmation.")
         if "country" in field_set:
             next_steps.append("Review cross-border registration details manually with international tax counsel.")
         if any("proof" in f or "cert" in f for f in field_set):
             next_steps.append("Request vendor to upload missing or valid compliance documents.")
-        if "bank_account_holder_mismatch" in field_set:
+        if "bank_account_holder_mismatch" in field_set or "bank_holder_mismatch" in field_set:
             next_steps.append("Request bank passbook, bank confirmation letter, or authorization certificate confirming entity ownership.")
-        if "gstin_pan_mismatch" in field_set:
+        if "gstin_pan_mismatch" in field_set or "gstin_discrepancy" in field_set:
             next_steps.append("Request vendor to resubmit matching PAN and GSTIN certificates.")
         if "duplicate_registration" in field_set:
             next_steps.append("Check existing vendor database records to merge or reconcile duplicate vendor account.")
